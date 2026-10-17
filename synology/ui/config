@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "com.xiaomi.camera.review": {
+      "type": "legacy",
+      "title": "时光 · 录像回看",
+      "desc": "浏览监控录像与人物片段",
+      "icon": "images/icon_{0}.png",
+      "url": "webman/3rdparty/XiaomiCameraReview/index.cgi/",
+      "urlTarget": "_blank",
+      "allUsers": true
+    }
+  }
+}

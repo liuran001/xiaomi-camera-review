@@ -1,0 +1,5 @@
+Flask==3.1.0
+gunicorn==23.0.0
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+tzdata==2025.2

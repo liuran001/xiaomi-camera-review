@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/opencv/opencv_zoo",
+  "commit": "47534e27c9851bb1128ccc0102f1145e27f23f98",
+  "model": "YOLOX",
+  "input_size": 416,
+  "person_class": 0,
+  "confidence_threshold": 0.65,
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "file": "object_detection_yolox_2022nov.onnx",
+      "bytes": 35858002,
+      "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
+      "source": "https://media.githubusercontent.com/media/opencv/opencv_zoo/47534e27c9851bb1128ccc0102f1145e27f23f98/models/object_detection_yolox/object_detection_yolox_2022nov.onnx"
+    }
+  ]
+}

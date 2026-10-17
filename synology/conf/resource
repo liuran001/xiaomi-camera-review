@@ -1,0 +1,15 @@
+{
+  "docker-project": {
+    "projects": [
+      {
+        "name": "xiaomi-review",
+        "path": "project",
+        "build_params": {
+          "build": false,
+          "force_pull": false,
+          "force_recreate": false
+        }
+      }
+    ]
+  }
+}

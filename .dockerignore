@@ -1,0 +1,15 @@
+.git
+data
+models
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc
+.superpowers
+tests
+output
+.github
+.playwright-cli
+.worktrees
+docs

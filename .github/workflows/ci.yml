@@ -1,0 +1,96 @@
+name: Verify source and deployment
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '${{ matrix.python }}'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python -m pip install -r requirements.txt
+      - run: python tools/download_model.py
+      - run: python -m unittest discover -s tests -v
+      - run: node --check static/app.js && node --check static/timeline.js
+      - run: node --test tests/test_ui.js tests/test_timeline.js tests/test_dsm_bootstrap.js
+      - run: python tools/build_release.py && python tools/build_spk.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-and-dsm-integration-python-${{ matrix.python }}
+          path: |
+            output/release/*
+            output/synology/*.spk
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare isolated configuration
+        run: |
+          python tools/init_config.py
+          python tools/download_model.py
+          mkdir -p "$RUNNER_TEMP/recordings"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('.env')
+          content = path.read_text().replace('/path/to/xiaomi_camera_videos', os.environ['RUNNER_TEMP'] + '/recordings')
+          path.write_text(content)
+          PY
+      - run: docker compose config --quiet && docker compose up --build -d
+      - name: Verify auth and fresh worker heartbeat
+        run: |
+          python - <<'PY'
+          import http.cookiejar, json, time, urllib.error, urllib.request
+          from pathlib import Path
+          values = dict(line.split('=', 1) for line in Path('.env').read_text().splitlines() if line and not line.startswith('#'))
+          base = 'http://127.0.0.1:8090'
+          client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+          for attempt in range(60):
+              try:
+                  client.open(base + '/', timeout=3).close()
+                  break
+              except (OSError, urllib.error.URLError):
+                  time.sleep(1)
+          else:
+              raise AssertionError('Web service did not become ready')
+          try:
+              client.open(base + '/api/status', timeout=5)
+              raise AssertionError('Unauthenticated API must be denied')
+          except urllib.error.HTTPError as error:
+              assert error.code == 401
+          request = urllib.request.Request(base + '/api/login', data=json.dumps({'password': values['APP_PASSWORD']}).encode(), headers={'Origin': base, 'Content-Type': 'application/json'})
+          with client.open(request, timeout=5) as response:
+              assert response.status == 200
+          for attempt in range(30):
+              with client.open(base + '/api/status', timeout=5) as response:
+                  status = json.load(response)
+              if status['worker_alive'] and not status['worker_error'] and not status['scan_error']:
+                  break
+              time.sleep(1)
+          else:
+              raise AssertionError('Worker failed readiness checks')
+          print('Container authentication and worker heartbeat verified')
+          PY
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose logs --tail 100 web worker
+      - name: Stop only the test application
+        if: always()
+        run: docker compose down

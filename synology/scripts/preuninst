@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+controller="$(dirname "$0")/package_control.py"
+if [ ! -f "$controller" ]; then
+  controller="${SYNOPKG_PKGDEST:-/var/packages/XiaomiCameraReview/target}/package_control.py"
+fi
+exec /usr/bin/python3 "$controller" preuninst

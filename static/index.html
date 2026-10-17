@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="app-base" content="{{ app_base }}"><meta name="auth-mode" content="{{ auth_mode }}">
+  <meta name="theme-color" content="#111a23"><title>时光 · 录像回看</title>
+  <link rel="stylesheet" href="{{ app_base }}/static/style.css"><script src="{{ app_base }}/static/timeline.js" defer></script><script src="{{ app_base }}/static/app.js" defer></script>
+</head>
+<body>
+  <div id="login" class="login-screen">
+    <form id="login-form" class="login-card"{% if auth_mode == 'dsm' %} hidden{% endif %}>
+      <div class="brand-mark">◉</div><p class="eyebrow">PRIVATE CAMERA LIBRARY</p>
+      <h1>留下的每一刻。</h1><p class="muted">登录你的私人录像库，回看影像与人物片段。</p>
+      <label for="password">访问密码</label><input id="password" type="password" autocomplete="current-password" required autofocus>
+      <button type="submit" class="primary">进入录像库 <span>→</span></button><p id="login-error" class="error" role="alert"></p>
+      <small>仅通过私人网络访问 · 原始录像只读</small>
+    </form>
+    <div id="dsm-login" class="login-card"{% if auth_mode != 'dsm' %} hidden{% endif %}>
+      <div class="brand-mark">◉</div><h1>登录 DSM，继续回看。</h1>
+      <p class="muted">DSM 登录已失效，请返回 DSM 重新登录后打开录像回看。</p>
+      <a id="dsm-signin" class="primary" href="/?launchApp=com.xiaomi.camera.review">前往 DSM 登录 →</a>
+    </div>
+  </div>
+  <div id="app" hidden>
+    <header class="topbar"><a class="brand" href="{{ app_base }}/">◉ <span>时光<small>CAMERA LIBRARY</small></span></a>
+      <div class="header-actions"><span id="worker-badge" class="chip">连接中</span><button id="logout" class="quiet">退出</button></div></header>
+    <main>
+      <div class="page-heading"><div><p class="eyebrow">YOUR PRIVATE ARCHIVE</p><h1>录像回看<span class="accent">.</span></h1><p class="muted">按时间找回画面，从人物出现的时刻开始。</p></div>
+        <div class="overview"><strong id="clip-count">—</strong><span>段录像已发现</span></div></div>
+      <section class="filterbar" aria-label="筛选录像"><label>录像日期 <select id="day" aria-label="录像日期"></select></label>
+        <label>摄像头 / 通道 <select id="channel" aria-label="摄像头通道"><option value="">全部通道</option></select></label>
+        <span id="timezone" class="source-time">北京时间 UTC+08:00</span><button id="refresh" class="quiet">↻ 刷新</button></section>
+      <div class="workspace">
+        <aside class="panel library"><div class="panel-heading"><h2>当日录像</h2><span id="list-count" class="count">0</span></div>
+          <div id="clips" class="clip-list"></div></aside>
+        <section class="viewer-column">
+          <div class="panel viewer"><div class="player-heading"><div><span id="current-channel" class="eyebrow">选择一段录像</span><h2 id="current-title">等待画面</h2></div><span id="playback-mode" class="chip">兼容播放</span></div>
+            <div class="video-shell"><video id="video" controls playsinline preload="metadata"></video><div id="player-message" class="player-message"><span class="empty-icon">▷</span><span>选择左侧录像，开始回看</span></div></div>
+            <div class="timeline">
+              <form id="jump-form" class="jump-form" novalidate><label for="jump-date">定位日期<input id="jump-date" type="date" required></label><label for="jump-time">北京时间<input id="jump-time" type="time" step="1" value="00:00:00" required></label><button type="submit" class="quiet">跳转</button></form>
+              <div class="timeline-caption"><span>当天北京时间轴</span><strong id="position">选择时刻开始回看</strong></div>
+              <div class="seek-wrap"><div id="coverage-markers" aria-hidden="true"></div><div id="event-markers" aria-hidden="true"></div><input id="seek" aria-label="北京时间全天跳转" type="range" min="0" max="86399" value="0" step="1" disabled></div>
+              <div class="day-ticks" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+              <div class="timeline-legend"><span><i class="coverage-key"></i> 可播放录像 <i></i> 抽样人物片段</span><span>拖动跨文件定位 · 空档自动跳过</span></div></div>
+            <div class="player-footer"><button id="previous" class="quiet" disabled>← 上一段</button><span id="clip-analysis" class="muted">尚未选择录像</span><button id="next" class="quiet" disabled>下一段 →</button></div>
+            <details class="source-option"><summary>原始画质</summary><p>浏览器支持 HEVC / Opus 时可直接播放。兼容模式按需生成 30 秒片段，自动接续。</p><button id="original" class="quiet">播放原片</button><button id="compatible" class="quiet">切换兼容播放</button></details>
+          </div>
+          <section class="panel events-panel"><div class="panel-heading"><div><h2>人物出现 <span id="event-count" class="count">0</span></h2><p class="muted">关键帧抽样 · 非完整运动跟踪 · 时间可能偏移，请从片段前几秒确认</p></div><span class="event-label">PERSON</span></div>
+            <div id="events" class="event-list"></div><p class="sampling-note">结果为抽样检测，可能漏检或误检；未分析部分不代表无人。点击片段可回到对应画面。</p></section>
+        </section>
+      </div>
+      <section class="panel analysis-panel"><div><span class="status-dot"></span><strong id="analysis-title">人物索引</strong><span id="analysis-detail" class="muted">等待后台状态</span></div><button id="pause" class="quiet">暂停分析</button><div class="progress-track"><div id="overall-progress"></div></div><p id="system-error" class="error" role="status"></p></section>
+      <footer>时光 · 私人影像档案 <span>只读原片 / 按需回看 / 来源时间</span></footer>
+    </main><div id="toast" role="alert" hidden></div>
+  </div>
+</body>
+</html>

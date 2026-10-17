@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+models/
+.env
+.env.*
+!.env.example
+.worktrees/
+*.log
+.superpowers/
+.playwright-cli/
+output/
