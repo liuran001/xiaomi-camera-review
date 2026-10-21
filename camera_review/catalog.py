@@ -129,7 +129,9 @@ class Catalog:
 
     def set_state(self, key, value):
         with self.connect() as db:
-            db.execute('INSERT OR REPLACE INTO state VALUES (?,?)', (key, json.dumps(value)))
+            db.execute('''INSERT INTO state (key,value) VALUES (?,?)
+                          ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                          WHERE state.value IS NOT excluded.value''', (key, json.dumps(value)))
 
     def scan(self):
         seen, observations, errors = set(), [], []
@@ -180,14 +182,19 @@ class Catalog:
                         columns = list(info) + ['size', 'mtime', 'generation', 'observations', 'status', 'stable_since']
                         values = list(info.values()) + [stat.st_size, stat.st_mtime_ns, secrets.token_hex(16), 1, 'unstable', now]
                         db.execute(f'INSERT OR REPLACE INTO clips ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)})', values)
-                    else:
+                    elif old['status'] == 'unstable':
                         # NULL means an unstable row predating observed-window tracking.
                         since = old['stable_since'] if old['stable_since'] is not None else now
                         ready = (self.complete_size(stat.st_size) and old['observations'] >= 1
                                  and now - since >= self.stable_seconds
                                  and now - stat.st_mtime >= self.stable_seconds)
-                        db.execute('UPDATE clips SET observations=observations+1,status=?,stable_since=? WHERE id=?',
-                                   ('pending' if old['status'] == 'unstable' and ready else old['status'], since, info['id']))
+                        # Only the first two observations establish stability. Rewriting
+                        # every unchanged recording on each scan needlessly dirties pages.
+                        count = max(2, old['observations'])
+                        status = 'pending' if ready else 'unstable'
+                        if (count, status, since) != (old['observations'], old['status'], old['stable_since']):
+                            db.execute('UPDATE clips SET observations=?,status=?,stable_since=? WHERE id=?',
+                                       (count, status, since, info['id']))
         with self.connect() as db:
             for row in db.execute("SELECT id FROM clips WHERE status!='missing'").fetchall():
                 if row['id'] not in seen:
@@ -199,6 +206,16 @@ class Catalog:
         self.cleanup_seek_cache()
         self.cleanup()
         return True
+
+    def next_stability_check(self):
+        # A paused/incomplete upload cannot become ready merely by waiting.
+        # Revisit it only when a source notification reports another change.
+        with self.connect() as db:
+            rows = db.execute("SELECT size,mtime,stable_since FROM clips WHERE status='unstable'").fetchall()
+        deadlines = [max(row['stable_since'] if row['stable_since'] is not None else time.time(),
+                         row['mtime'] / 1e9) + self.stable_seconds
+                     for row in rows if self.complete_size(row['size'])]
+        return min(deadlines) if deadlines else None
 
     def clips(self, date=None, channel=None):
         query, args = "SELECT * FROM clips WHERE status!='missing'", []

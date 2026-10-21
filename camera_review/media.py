@@ -279,10 +279,19 @@ def analyze_chunk(source, cache, start, duration, detector, sample_seconds=3, he
     try:
         return _analyze_chunk(source, cache, start, duration, detector, sample_seconds, heartbeat, cancelled, gate, True)
     except _NoSampleFrames:
-        return _analyze_chunk(source, cache, start, duration, detector, sample_seconds, heartbeat, cancelled, gate, False)
+        try:
+            return _analyze_chunk(source, cache, start, duration, detector, sample_seconds, heartbeat, cancelled, gate, False)
+        except _NoSampleFrames:
+            if start <= 0 or not 0 < duration < sample_seconds:
+                raise
+            # A VFR frame may start before the boundary but remain displayed in
+            # this tiny tail. Read one sample interval back and let fps choose
+            # the real frame at the boundary. Empty/broken decodes still fail.
+            return _analyze_chunk(source, cache, start, duration, detector, sample_seconds,
+                                  heartbeat, cancelled, gate, False, preroll=min(start, sample_seconds))
 
 
-def _analyze_chunk(source, cache, start, duration, detector, sample_seconds, heartbeat, cancelled, gate, keyframes_only):
+def _analyze_chunk(source, cache, start, duration, detector, sample_seconds, heartbeat, cancelled, gate, keyframes_only, preroll=0):
     """Only successful nonempty chunks publish hits. Offsets are approximate.
 
     Decoder input seeks to chunk start, discards non-keyframes, then normalizes to
@@ -291,10 +300,14 @@ def _analyze_chunk(source, cache, start, duration, detector, sample_seconds, hea
     does not reconstruct motion between samples or claim precise event timing.
     """
     check_cancelled(cancelled)
-    seek = ['-ss', str(start)] + (['-skip_frame', 'nokey'] if keyframes_only else [])
+    seek = ['-ss', str(start - preroll)] + (['-skip_frame', 'nokey'] if keyframes_only else [])
+    sampling = f'fps=1/{sample_seconds}:eof_action=pass'
+    if preroll:
+        sampling = f'setpts=PTS-{preroll}/TB,' + sampling + ':start_time=0'
     # Select samples before resizing so unused decoded frames avoid scale/pad work.
     command = BASE + seek + ['-i', str(source), '-t', str(duration),
-                      '-an', '-sn', '-vf', f'fps=1/{sample_seconds}:eof_action=pass,scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2',
+                      '-an', '-sn', '-vf', sampling + ',scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2',
+                      *(['-fps_mode', 'passthrough'] if preroll else []),
                       '-pix_fmt', 'bgr24', '-f', 'rawvideo', '-threads', '1', '-']
     hits, created = [], []
     last_beat = time.monotonic()

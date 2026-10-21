@@ -15,6 +15,7 @@ x-common: &common
     COOKIE_SECURE: "${COOKIE_SECURE:-0}"
     RECORDINGS_ROOT: /recordings
     DATA_ROOT: /data
+    HEARTBEAT_FILE: /runtime/worker-heartbeat
     MODEL_ROOT: /models
     SOURCE_TZ: "${SOURCE_TZ:-Asia/Shanghai}"
     STABLE_SECONDS: "${STABLE_SECONDS:-180}"
@@ -47,11 +48,24 @@ x-common: &common
       read_only: true
       bind:
         create_host_path: false
+    - type: volume
+      source: runtime
+      target: /runtime
+      volume:
+        nocopy: true
   logging:
     driver: json-file
     options:
       max-size: 10m
       max-file: "3"
+
+volumes:
+  runtime:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=1m,uid=${APP_UID:-1000},gid=${APP_GID:-1000},mode=0750"
 
 services:
   web:

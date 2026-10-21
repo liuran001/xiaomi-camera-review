@@ -14,7 +14,8 @@
 | `SOURCE_TZ` | `Asia/Shanghai` | 解析文件名时间；界面时间轴固定北京时间 |
 | `STABLE_SECONDS` | `180` | 连续观察文件大小和修改时间不变的最短时长 |
 | `COMPLETE_FILE_BYTES` | `0` | 完成文件大小校验，`0` 为关闭；正数要求严格相等 |
-| `SCAN_SECONDS` | `45` | 自动扫描间隔，最少 5 秒 |
+| `SCAN_SECONDS` | `45` | 目录变更触发扫描的最小间隔；监听不可用时为轮询间隔，最少 5 秒 |
+| `HEARTBEAT_FILE` | Compose 为 `/runtime/worker-heartbeat` | web、worker 共享的内存心跳文件；源码未配置时兼容数据库心跳 |
 | `SAMPLE_SECONDS` | `3` | 人物分析抽样间隔，最少 1 秒 |
 | `ANALYSIS_CHUNK_SECONDS` | `60` | 可断点分析块长度，限制 1–60 秒 |
 | `EMPTY_SCENE_GATE` | `0` | `1` 启用空场景模型跳过策略 |
@@ -28,3 +29,5 @@
 容器内 `RECORDINGS_ROOT=/recordings`、`DATA_ROOT=/data`、`MODEL_ROOT=/models` 已由 Compose 配好。源码开发可覆盖这三个变量以及 `FFMPEG`、`FFPROBE` 的可执行文件路径。`DSM_GATEWAY_SECRET_FILE`、`DSM_APP_PREFIX` 仅用于 DSM 网关，不应添加到普通独立部署中。
 
 缓存上限目前为代码常量：定位 MP4 512 MiB，播放 MP4 1.5 GiB；SQLite、JPEG 和当前在写临时文件另计。单个原片或重封装结果超过 512 MiB 时无法建立定位缓存。缩略图数量随录像增加，需另行规划 `data/` 容量。
+
+Linux worker 启动时扫描一次并建立 inotify 目录监听，之后仅在录像变化或完整大小文件的稳定期限到期时扫描。固定大小校验未满足且不再变化的上传等待下一次通知。目录监听溢出、根目录丢失等异常会触发轮询回退，并尝试恢复监听；非 Linux 源码环境沿用周期扫描。Compose 的 `runtime` 卷由 Docker local tmpfs 驱动管理，使用配置的 UID/GID，重启后重新挂载，心跳不需备份。自定义 `HEARTBEAT_FILE` 时须让两个进程使用同一可访问文件；配置后文件丢失不会回退旧数据库值。

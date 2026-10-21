@@ -209,6 +209,50 @@ class MediaTests(unittest.TestCase):
                 self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), original)
 
     @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg unavailable')
+    def test_fractional_tail_samples_the_frame_displayed_across_chunk_boundary(self):
+        # VFR camera frame: 59.980489..60.030489 spans the next 60s chunk.
+        # Accurate seek drops its start before60, although it is still displayed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); recordings = root / 'recordings'; recordings.mkdir()
+            source = recordings / '00_20261017090000_20261017090200.mp4'
+            subprocess.run(media.BASE + ['-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=20',
+                            '-frames:v', '1201', '-vf', r'settb=1/90000,setpts=if(eq(N\,0)\,0\,(N-0.39022)*4500)',
+                            '-fps_mode', 'vfr', '-enc_time_base', '1:90000', '-c:v', 'libx264', '-bf', '0',
+                            '-threads', '1', '-g', '160', '-keyint_min', '160', '-sc_threshold', '0',
+                            '-video_track_timescale', '90000', str(source)], check=True)
+            os.utime(source, (time.time()-300, time.time()-300))
+            original = source.read_bytes(), source.stat().st_mtime_ns
+            cat = Catalog(recordings, root / 'data', stable_seconds=0); cat.scan(); cat.scan()
+            clip = cat.clips()[0]
+            actual = media.probe_duration(source)
+            self.assertAlmostEqual(actual, 60.030489, places=5)
+            cat.publish_media_duration(clip, actual); cat.publish_chunk(clip['id'], clip['generation'], 60, [])
+            # Independent reference is the final real frame, resized identically.
+            reference = subprocess.run(media.BASE + ['-ss', '59.97', '-i', str(source), '-frames:v', '1',
+                                      '-vf', 'scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2',
+                                      '-pix_fmt', 'bgr24', '-f', 'rawvideo', '-threads', '1', '-'],
+                                      capture_output=True, check=True).stdout
+            self.assertEqual(len(reference), 640*360*3)
+
+            class Person:
+                frames = []
+                def score(self, frame):
+                    self.frames.append(frame.tobytes())
+                    return .8
+
+            detector = Person(); worker = Worker(cat, detector=detector); worker.cover_turn = False
+            worker.step()
+            result = cat.clip(clip['id'])
+            self.assertEqual((result['status'], result['completed'], result['error']), ('complete', actual, None))
+            self.assertEqual(detector.frames, [reference], 'detect the actual final frame exactly once')
+            self.assertEqual([event['first_hit'] for event in cat.events()], [60])
+            self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), original)
+            # A seek beyond the real EOF must still fail and cannot invent progress.
+            with self.assertRaises(media._NoSampleFrames):
+                analyze_chunk(source, cat.cache, 63, .03, detector)
+            self.assertEqual(detector.frames, [reference])
+
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg unavailable')
     def test_real_sixty_one_and_sixty_two_second_files_complete_short_tail(self):
         for length in [61, 62]:
             with self.subTest(length=length), tempfile.TemporaryDirectory() as tmp:

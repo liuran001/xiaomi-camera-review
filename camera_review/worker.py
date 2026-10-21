@@ -7,23 +7,40 @@ import time
 from .catalog import catalog_from_env
 from .media import MediaCancelled, PersonDetector, analyze_chunk, make_preview, make_thumbnail, probe_duration, ensure_seek_source
 from .motion import EmptySceneGate
+from .heartbeat import write_heartbeat
+from .scanning import ScanScheduler
 
 LOG = logging.getLogger('camera-review')
 
 
 class Worker:
-    def __init__(self, catalog, detector=None):
+    def __init__(self, catalog, detector=None, monitor=None):
         self.cat, self.detector = catalog, detector
-        self.last_scan = 0
+        self.monitor = monitor
+        self._idle_version = None
+        self._work_at = 0
         self.cover_turn = True
         self.model_retry = 0
+        self._last_heartbeat = None
+        self._heartbeat_lock = threading.Lock()
         self.chunk_seconds = min(60, max(1, int(os.environ.get('ANALYSIS_CHUNK_SECONDS', '60'))))
         self.sample_seconds = max(1, int(os.environ.get('SAMPLE_SECONDS', '3')))
         self.scan_seconds = max(5, int(os.environ.get('SCAN_SECONDS', '45')))
+        self.scanner = ScanScheduler(catalog, self.scan_seconds)
+        self.heartbeat_file = os.environ.get('HEARTBEAT_FILE')
         self.empty_scene_gate = os.environ.get('EMPTY_SCENE_GATE', '0') == '1'
 
     def heartbeat(self):
-        self.cat.set_state('heartbeat', time.time())
+        # Both the pulse thread and media callbacks report liveness. Coalesce them
+        # without postponing a retry if the database write fails.
+        with self._heartbeat_lock:
+            now = time.monotonic()
+            if self._last_heartbeat is None or now - self._last_heartbeat >= 30:
+                if self.heartbeat_file:
+                    write_heartbeat(self.heartbeat_file, time.time())
+                else:
+                    self.cat.set_state('heartbeat', time.time())
+                self._last_heartbeat = now
 
     def measured_source(self, clip, cancelled=None):
         source = ensure_seek_source(self.cat, clip, cancelled=cancelled)
@@ -33,9 +50,36 @@ class Worker:
 
     def step(self):
         self.heartbeat()
-        if time.monotonic() - self.last_scan >= self.scan_seconds:
-            self.cat.scan()
-            self.last_scan = time.monotonic()
+        scanned = self.scanner.tick()
+        version = self.monitor.execute('PRAGMA data_version').fetchone()[0] if self.monitor is not None else None
+        if (not scanned and version is not None and version == self._idle_version
+                and time.monotonic() < self._work_at):
+            return False
+        worked = self._work()
+        if not worked and self.monitor is not None:
+            # Capture the version BEFORE querying queues. A web request committed
+            # during this iteration must wake the next one rather than be missed.
+            self._idle_version = version
+            self._work_at = time.monotonic() + self._retry_delay()
+        else:
+            self._idle_version = None
+        return worked
+
+    def _retry_delay(self):
+        with self.cat.connect() as db:
+            cover = db.execute("SELECT MIN(thumbnail_retry_at) FROM clips WHERE thumbnail IS NULL AND status IN ('pending','complete','error')").fetchone()[0]
+            analysis = db.execute("SELECT MIN(retry_at) FROM clips WHERE status IN ('pending','error')").fetchone()[0]
+        delays = []
+        if cover is not None:
+            delays.append(cover - time.time())
+        if analysis is not None and not self.cat.state('paused', False):
+            delay = analysis - time.time()
+            if self.detector is None:
+                delay = max(delay, self.model_retry - time.monotonic())
+            delays.append(delay)
+        return max(1, min(delays)) if delays else float('inf')
+
+    def _work(self):
         job = self.cat.claim_preview()
         if job:
             media = None
@@ -141,30 +185,39 @@ def main():
     else:
         import fcntl
         fcntl.flock(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    cat.recover()
-    worker = Worker(cat)
-    # Long encodes still report liveness; this thread never performs media work.
-    stop = threading.Event()
-
-    def pulse():
-        while not stop.wait(10):
-            try:
-                worker.heartbeat()
-            except Exception:
-                LOG.exception('heartbeat write failed')
-
-    threading.Thread(target=pulse, daemon=True).start()
     try:
-        while True:
+        # Keep one idle connection for the worker lifetime. It never starts a
+        # transaction; operations still use independent short connections. Closing
+        # the last connection after every poll otherwise recreates WAL/SHM files
+        # and checkpoints even tiny heartbeat writes on the NAS filesystem.
+        with cat.connect() as monitor:
+            cat.recover()
+            worker = Worker(cat, monitor=monitor)
+            stop = threading.Event()
+
+            def pulse():
+                while not stop.wait(10):
+                    try:
+                        worker.heartbeat()
+                    except Exception:
+                        LOG.exception('heartbeat write failed')
+
+            pulse_thread = threading.Thread(target=pulse, daemon=True)
+            pulse_thread.start()
             try:
-                if not worker.step():
-                    time.sleep(1)
-            except Exception as exc:
-                LOG.exception('worker iteration failed')
-                cat.set_state('worker_error', str(exc)[:800])
-                time.sleep(5)
+                while True:
+                    try:
+                        if not worker.step():
+                            time.sleep(1)
+                    except Exception as exc:
+                        LOG.exception('worker iteration failed')
+                        cat.set_state('worker_error', str(exc)[:800])
+                        time.sleep(5)
+            finally:
+                stop.set()
+                pulse_thread.join()
+                worker.scanner.close()
     finally:
-        stop.set()
         lockfile.close()
 
 

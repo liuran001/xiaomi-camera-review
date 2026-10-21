@@ -17,6 +17,8 @@ flowchart LR
 
 `worker.py` 是唯一媒体任务执行者。优先处理用户播放，再处理预取、封面和可断点人物分析；分析遇到播放请求会让出资源。不要横向扩容 worker，否则恢复清理与任务调度不再满足单 worker 前提。
 
+`watcher.py` 通过 Linux inotify 监听目录和文件变更，空闲轮询仅读取通知描述符，不遍历或 stat 原片。`scanning.py` 合并变化并安排完整大小文件的稳定期限复查，监听失效时保留周期扫描和恢复路径。worker 保留一个不执行事务的 SQLite 连接，避免反复 checkpoint 和重建 WAL/SHM；空闲时通过该连接的 `data_version` 检测外部任务提交，任务失败仍按原期限重试。`heartbeat.py` 将每 30 秒一次的存活时间原子写入共享 tmpfs，web 从同一内存文件读取。
+
 `media.py` 通过 FFmpeg 对不完整定位表建立按版本复用的 stream-copy MP4，再按需生成 H.264/AAC 兼容短片。原片输入只读，不整体重编码；下载仍返回原始文件。YOLOX 每次只判断抽样帧的人物出现，不识别人脸身份。`motion.py` 可过滤静态场景的重复推理，解码仍执行。
 
 `web.py` 处理同源 API 和独立密码会话。DSM 网关对每次请求调用原生认证，签署请求绑定的 HMAC 身份；DSM Cookie 和 SynoToken 不传入应用容器。详细契约见 [API](../API.md) 和 [DSM 令牌接入](dsm-native-token-bridge.md)。

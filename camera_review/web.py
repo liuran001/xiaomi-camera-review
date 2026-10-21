@@ -12,6 +12,7 @@ from flask import Flask, g, jsonify, render_template_string, request, send_file,
 
 from .catalog import MEDIA_NAME, catalog_from_env
 from .dsm_auth import authenticate as authenticate_dsm, has_identity
+from .heartbeat import read_heartbeat
 
 
 def public_error(value):
@@ -34,6 +35,7 @@ def create_app(catalog=None, password=None, secret=None):
     attempts, lock = {}, threading.Lock()
     dsm_secret_file = os.environ.get('DSM_GATEWAY_SECRET_FILE')
     dsm_prefix = os.environ.get('DSM_APP_PREFIX', '')
+    heartbeat_file = os.environ.get('HEARTBEAT_FILE')
 
     @app.before_request
     def guard():
@@ -149,7 +151,7 @@ def create_app(catalog=None, password=None, secret=None):
             queue = {r['status']: r['n'] for r in db.execute('SELECT status,COUNT(*) n FROM previews GROUP BY status')}
             errors = [dict(r) for r in db.execute("SELECT id,error,retry_at FROM clips WHERE error IS NOT NULL ORDER BY start DESC LIMIT 20")]
             cover_errors = [dict(r) for r in db.execute("SELECT id,thumbnail_error AS error,thumbnail_retry_at AS retry_at FROM clips WHERE thumbnail_error IS NOT NULL ORDER BY start DESC LIMIT 20")]
-        heartbeat = cat.state('heartbeat')
+        heartbeat = read_heartbeat(heartbeat_file) if heartbeat_file else cat.state('heartbeat')
         for error in errors + cover_errors:
             error['error'] = public_error(error['error'])
         return jsonify(clip_counts=counts, clip_count=sum(counts.values()), completed_seconds=progress[0], total_seconds=progress[1],
